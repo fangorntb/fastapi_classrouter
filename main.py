@@ -99,8 +99,7 @@ class RouteClassFactory(PydanticModelBuilder):
             endpoint.__annotations__ = placeholder[0]
             self._router.prefix += f'/{obj.__name__}'.lower()
             response_model = self.gen_model(obj)
-            description: str = method[1].__doc__.split('<>')[0]
-            response_description: str = method[1].__doc__.split('<>')[1]
+            description, response_description = method[1].__doc__.split('<>')[:2]
             self._router.add_api_route(
                 path=path,
                 endpoint=method[1],
