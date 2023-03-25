@@ -1,4 +1,3 @@
-import asyncio
 import inspect
 import re
 from types import UnionType
@@ -20,7 +19,7 @@ class PlaceholderField:
         self.tpe = tpe
 
 
-class PydanticModelBuilder:
+class MetaPydanticModel:
     @classmethod
     def dict_model(cls, name: str, dict_def: dict) -> type[BaseModel]:
         fields = {}
@@ -51,12 +50,13 @@ class PydanticModelBuilder:
 
 
 class Resource:
-    def __init__(self, router: APIRouter, response_model: Type[BaseModel]):
+    def __init__(self, scope, router: APIRouter, response: Type[BaseModel], ):
         self.router = router
-        self.response_model = response_model
+        self.response = response
+        self.scope = scope
 
 
-class RouteClassFactory(PydanticModelBuilder):
+class MetaRouteClass(MetaPydanticModel):
     _routes = []
     _router = APIRouter()
     __http_methods = ['get', 'post', 'put', 'purge', 'delete']
@@ -78,7 +78,7 @@ class RouteClassFactory(PydanticModelBuilder):
     def http_methods(cls, function_name: str) -> List[str]:
         return list(filter(lambda x: x in function_name, cls.__http_methods))
 
-    def build(self, obj: object) -> Resource:
+    def build(self, obj: object()) -> Resource:
         global response_model
         methods = inspect.getmembers(
             obj, predicate=inspect.isfunction
@@ -93,11 +93,10 @@ class RouteClassFactory(PydanticModelBuilder):
             if method[0].startswith('_'):
                 include_in_schema = False
             placeholder = self._placeholder(method[1])
-            path = multiple_replace(f'/{method[0]}', dict([(i, '') for i in self.__http_methods + ['_']]))
+            path = '/' + multiple_replace(method[0], dict([(i, '') for i in self.__http_methods])).lstrip('_')
             path += placeholder[1]
             endpoint = method[1]
             endpoint.__annotations__ = placeholder[0]
-            self._router.prefix += f'/{obj.__name__}'.lower()
             response_model = self.gen_model(obj)
             description, response_description = method[1].__doc__.split('<>')[:2]
             self._router.add_api_route(
@@ -109,12 +108,15 @@ class RouteClassFactory(PydanticModelBuilder):
                 description=description,
                 response_description=response_description
             )
-        return Resource(router=self._router, response_model=response_model)
+        return Resource(router=self._router, response=response_model, scope=obj())
 
 
 # ----------------------------------------------------------------------------------------------------------------------
 # Example:
 
+import asyncio
+
+from time import time
 
 from fastapi import FastAPI
 from uvicorn import Config, Server
@@ -128,24 +130,45 @@ class Default(BaseModel):
     param5: str
 
 
-foo = RouteClassFactory(tags=['foo'])
+foo = MetaRouteClass(tags=['foo'])
 
 
 @foo.build
-class Foo:
-    param: str | Default = None
+class Info:
+    param_1: str | Default = None
+    param_2: float = ...
     """
     info
     """
+    any_data = 0
+
+    class ResponseClass:
+        def __init__(self, foo: str):
+            self.foo = foo
+
+    def some_method(self):
+        return f'{self.ResponseClass.__dict__} {self.any_data}'
 
     @staticmethod
-    def post_data(data: PlaceholderField(str), param: Default):
+    def _get_data_foo():
         "default foo method<>default foo answer"
-        return Foo.response_model(param=param).dict()
+        return Info.response(param_1=Info.scope.some_method(), param_2=time()).dict()
+
+    @staticmethod
+    def post_data_foo(data: PlaceholderField(str), param: Default):
+        """default foo method<>default foo answer"""
+        return Info.response(param_1=Info.scope.__some_function(), param_2=time()).dict()
+
+    @staticmethod
+    def __some_function():
+        return 'go to /data_foo'
+
+# this is a cycle Example
+# Info.router.include_router(Info.router)
 
 
 app = FastAPI(docs_url='/')
-app.include_router(Foo.router)
+app.include_router(Info.router)
 
 if __name__ == '__main__':
     asyncio.run(Server(Config(app)).serve())
