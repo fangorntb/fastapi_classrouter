@@ -4,7 +4,7 @@ from types import UnionType
 from typing import Optional, get_origin, Union, Type, List
 
 from fastapi.routing import APIRouter
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, create_model, Field
 
 
 def multiple_replace(string: str, rep_dict: dict[str, str]) -> str:
@@ -13,10 +13,11 @@ def multiple_replace(string: str, rep_dict: dict[str, str]) -> str:
 
 
 class PlaceholderField:
-    def __init__(self, tpe: type):
+    def __init__(self, tpe: type, res: str = None):
         if tpe not in (str, int,):
             raise TypeError('tpe for PlaceholderField must be in (str, int, )')
         self.tpe = tpe
+        self.res = res
 
 
 class MetaPydanticModel:
@@ -71,7 +72,8 @@ class MetaRouteClass(MetaPydanticModel):
         for name, annotation in annotations.items():
             if isinstance(annotation, PlaceholderField):
                 annotations[name] = annotation.tpe
-                placeholders += "/{" + f'{name}' + "}"
+                placeholders += "/{" + f'{name}' + "}" +\
+                    f"/{annotation.res}" if annotation.res is not None else ''
         return annotations, placeholders
 
     @classmethod
@@ -96,6 +98,7 @@ class MetaRouteClass(MetaPydanticModel):
             path = '/' + multiple_replace(method[0], dict([(i, '') for i in self.__http_methods])).lstrip('_')
             path += placeholder[1]
             endpoint = method[1]
+            self._router.prefix = f'/{obj.__name__}'.lower()
             endpoint.__annotations__ = placeholder[0]
             response_model = self.gen_model(obj)
             description, response_description = method[1].__doc__.split('<>')[:2]
@@ -145,30 +148,46 @@ class Info:
     class ResponseClass:
         def __init__(self, foo: str):
             self.foo = foo
-        
-    def some_method(self):
+
+    async def some_method(self):
         return f'{self.ResponseClass.__dict__} {self.any_data}'
 
     @staticmethod
-    def _get_data_foo():
+    async def _get_data_foo():
         "default foo method<>default foo answer"
-        return Info.response(param_1=Info.scope.some_method(), param_2=time()).dict()
+        return Info.response(param_1=await Info.scope.some_method(), param_2=time()).dict()
 
     @staticmethod
-    def post_data_foo(data: PlaceholderField(str), param: Default):
+    async def post_data_foo(param: Default, data=2):
         """default foo method<>default foo answer"""
-        return Info.response(param_1=Info.scope.__some_function(), param_2=time()).dict()
+        return Info.response(param_1=await Info.scope.__some_function(), param_2=time()).dict()
 
     @staticmethod
-    def __some_function():
+    async def __some_function():
         return 'go to /data_foo'
+
+
+foo = MetaRouteClass(tags=['foo'])
+
+
+@foo.build
+class Api:
+    param_1: str = None
+    param_2: str = None
+
+    @staticmethod
+    async def post_data(param1: PlaceholderField(int, 'another_1'), param2: PlaceholderField(int, 'another_2')):
+        """docstring<>docstring"""
+        return Api.response().dict()
+
 
 # this is a cycle Example
 # Info.router.include_router(Info.router)
 
 
 app = FastAPI(docs_url='/')
-app.include_router(Info.router)
+Api.router.include_router(Info.router)
+app.include_router(Api.router)
 
 if __name__ == '__main__':
     asyncio.run(Server(Config(app)).serve())
