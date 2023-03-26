@@ -59,7 +59,7 @@ class Resource:
 class MetaRouteClass(MetaPydanticModel):
     _routes = []
     _router = APIRouter()
-    __http_methods = ['get', 'post', 'put', 'purge', 'delete']
+    __http_methods = ['get', 'post', 'put', 'patch', 'delete']
 
     def __init__(self, *args, **kwargs):
         self._router = APIRouter(*args, **kwargs)
@@ -145,7 +145,7 @@ class Info:
     class ResponseClass:
         def __init__(self, foo: str):
             self.foo = foo
-
+        
     def some_method(self):
         return f'{self.ResponseClass.__dict__} {self.any_data}'
 
