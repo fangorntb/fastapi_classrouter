@@ -18,6 +18,7 @@ class PlaceholderField:
         self.tpe = tpe
         self.res = res
 
+
 class Resource:
     def __init__(self, scope, router: APIRouter, ):
         self.router = router
@@ -27,10 +28,8 @@ class Resource:
 class MetaRouteClass:
     _routes = []
     _router = APIRouter()
-    __http_methods = ['get', 'post', 'put', 'patch', 'delete']
 
-    def __init__(self, *args, **kwargs):
-        self._router = APIRouter(*args, **kwargs)
+    __http_methods = ['get', 'post', 'put', 'patch', 'delete']
 
     @staticmethod
     def _placeholder(method) -> tuple[dict, str]:
@@ -47,33 +46,35 @@ class MetaRouteClass:
     def http_methods(cls, function_name: str) -> List[str]:
         return list(filter(lambda x: x in function_name, cls.__http_methods))
 
-    def build(self, obj: object(), ) -> Resource:
+    @classmethod
+    def build(cls, obj: object(), ) -> Resource:
         methods = inspect.getmembers(
             obj, predicate=inspect.isfunction
         )
 
         for method in methods:
-            http_methods = self.http_methods(method[0])
+            http_methods = cls.http_methods(method[0])
 
             if not http_methods or method[0].startswith('__'):
                 continue
 
-            resource_name = multiple_replace(method[0], dict([(i, '') for i in self.__http_methods]))
+            resource_name = multiple_replace(method[0], dict([(i, '') for i in cls.__http_methods]))
             resource_name = resource_name[:3].replace('_', '') + resource_name[3:]
-            response_model = obj().__getattribute__(f'{resource_name}_response_model') \
-                if hasattr(obj, f'{resource_name}_response_model') else None
             include_in_schema = True
             if method[0].startswith('_'):
                 include_in_schema = False
 
-            placeholder = self._placeholder(method[1])
+            placeholder = cls._placeholder(method[1])
             path = '/' + resource_name
             path += placeholder[1]
             endpoint = method[1]
             endpoint.__annotations__ = placeholder[0]
+            response_model = endpoint.__annotations__.get('return')
             description, response_description = method[1].__doc__.split('<>')[:2]
-            self._router.add_api_route(
+            cls._router.add_api_route(
                 path=path,
+                name=resource_name,
+                tags=[obj.__name__],
                 endpoint=method[1],
                 methods=http_methods,
                 include_in_schema=include_in_schema,
@@ -81,7 +82,7 @@ class MetaRouteClass:
                 response_description=response_description,
                 response_model=response_model,
             )
-        return Resource(router=self._router, scope=obj())
+        return Resource(router=cls._router, scope=obj())
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -101,7 +102,7 @@ class Default(BaseModel):
     param5: str
 
 
-foo = MetaRouteClass(tags=['foo'])
+foo = MetaRouteClass()
 
 
 @foo.build
@@ -110,7 +111,6 @@ class Hidden:
     info
     """
     any_data = 0
-    data_response_model = Default
 
     class ResponseClass:
         def __init__(self, foo: str):
@@ -120,35 +120,9 @@ class Hidden:
         return f'{self.ResponseClass.__dict__} {self.any_data}'
 
     @staticmethod
-    async def _post_data(param: Default):
+    async def _post_data(param: Default) -> Default:
         """default foo method<>default foo answer"""
         return param
     @staticmethod
     async def __some_function():
         return 'go to /data_foo'
-
-
-foo = MetaRouteClass(tags=['foo'])
-
-
-@foo.build
-class Api:
-    param_1: str = None
-    param_2: str = None
-
-    @staticmethod
-    async def post_data(param1: PlaceholderField(int, 'another_1'), param2: PlaceholderField(int, 'another')):
-        """docstring<>docstring"""
-        return
-
-
-# this is a cycle Example
-# Info.router.include_router(Info.router)
-
-
-app = FastAPI(docs_url='/')
-Api.router.include_router(Hidden.router)
-app.include_router(Api.router)
-
-if __name__ == '__main__':
-    asyncio.run(Server(Config(app)).serve())
