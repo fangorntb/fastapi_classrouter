@@ -1,9 +1,18 @@
 import inspect
 import re
-from typing import List
+from typing import List, Any
 
+from fastapi.datastructures import Default
 from fastapi.routing import APIRouter
 
+from fastapi.responses import (
+    JSONResponse,
+    FileResponse,
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    StreamingResponse
+)
 
 def multiple_replace(string: str, rep_dict: dict[str, str]) -> str:
     pattern = re.compile("|".join([re.escape(k) for k in sorted(rep_dict, key=len, reverse=True)]), flags=re.DOTALL)
@@ -26,7 +35,7 @@ class Resource:
 
 class MetaRouteClass:
     _routes = []
-    __http_methods = ['get', 'post', 'put', 'patch', 'delete']
+    __http_methods = ['get', 'post', 'put', 'patch', 'delete', 'head']
 
     def __init__(self, *args, **kwargs):
         self._route = APIRouter(*args, **kwargs)
@@ -45,6 +54,24 @@ class MetaRouteClass:
     @classmethod
     def http_methods(cls, function_name: str) -> List[str]:
         return list(filter(lambda x: x in function_name, cls.__http_methods))
+
+    def _get_response_class(self, doc: str) -> Any:
+        self.response_class_name = f"{re.search(r'<rc>(.+?)</rc>', doc).group(1)}" \
+            if re.search(r'<rc>(.+?)</rc>', doc) is not None else ''
+        match self.response_class_name:
+            case 'File':
+                return FileResponse
+            case 'HTML':
+                return HTMLResponse
+            case 'Text':
+                return PlainTextResponse
+            case 'Redirect':
+                return RedirectResponse
+            case 'Streaming':
+                return StreamingResponse
+        return Default(
+            JSONResponse,
+        )
 
     def build(self, obj: object(), ) -> Resource:
         methods = inspect.getmembers(
@@ -70,10 +97,24 @@ class MetaRouteClass:
             endpoint = method[1]
             endpoint.__annotations__ = placeholder[0]
             response_model = endpoint.__annotations__.get('return')
-            resource_name = re.search(r'<n>(.+?)</n>',  method[1].__doc__).group(1) \
-                if re.search(r'<n>(.+?)</n>',  method[1].__doc__) is not None else ''
-            description, response_description = method[1].__doc__.replace('\n', '<br>').replace(f'<n>{resource_name}</n>', '').split('<>')[:2]
+            resource_name = re.search(r'<n>(.+?)</n>', method[1].__doc__).group(1) \
+                if re.search(r'<n>(.+?)</n>', method[1].__doc__) is not None else ''
 
+            response_class = self._get_response_class(method[1].__doc__)
+
+            description, response_description = method[1].__doc__.replace(
+                f'<n>{resource_name}</n>',
+                ''
+            ).replace(
+                f'<rc>{self.response_class_name}</rc>',
+                ''
+            ).replace(
+                '\n' * 2,
+                ''
+            ).replace(
+                '\n' * 3,
+                ''
+            ).replace('\n', '<br>').split('<>')[:2]
             self._route.add_api_route(
                 path=path,
                 tags=[obj.__name__],
@@ -84,5 +125,6 @@ class MetaRouteClass:
                 description=str(description),
                 response_description=str(response_description),
                 response_model=response_model,
+                response_class=response_class,
             )
         return Resource(router=self._route, scope=obj())
